@@ -1,0 +1,44 @@
+PART 1 Commit 1:
+******************
+
+// Import the sqlForPartialUpdate function from the sql.js module
+const { sqlForPartialUpdate } = require("./sql");
+
+PART 1 Commit 2:
+******************
+// Start test suite for the sqlForPartialUpdate function
+describe("sqlForPartialUpdate", function () {
+
+  // Test the function with data
+  test("works with data", function () {
+    // Call the sqlForPartialUpdate function with sample data
+    const result = sqlForPartialUpdate(
+      { firstName: "Douglas", age: 42 },
+      { firstName: "first_name" }
+    );
+    // Expect the result to match a specific format
+    expect(result).toEqual({
+      setCols: '"first_name"=$1, "age"=$2',
+      values: ["Douglas", 42],
+    });
+  });
+
+  // Test the function with no data - should throw an error
+  test("throws error if no data", function () {
+    // Call the sqlForPartialUpdate function with empty objects
+    // expect error to be thrown with specific message
+    expect(() => sqlForPartialUpdate({}, {})).toThrowError(
+      "No data"
+    );
+  });
+});
+
+Documentation:
+sql.test.js tests the sqlForPartialUpdate function from the helpers/sql.js module. The function takes two objects as arguments: 
+a data object with the values to be updated, and a js-to-sql object mapping names of the columns to the names in the database. 
+It returns an object with two properties: setCols (a string with column names and corresponding update parameter placeholders)
+and values (an array of values for the update statement to use).
+
+'Test the function with data' checks the function with sample data. It expects the resulting format to match.
+
+"Test the function with no data' checks the function with no data and exepcts an error ("No data").
