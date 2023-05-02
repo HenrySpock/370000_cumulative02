@@ -1425,3 +1425,127 @@ companyHandle (string): The unique identifier of the offering company
 
 Throws
 NotFoundError: if no matching jobs are found 
+
+******************
+Part 5 Commit 26:
+****************** 
+Add apply() method to user model in models/user.js:
+  /** Add a job application for the user with the provided username to the jobs table. 
+   
+  Parameters:
+    jobId: the ID of the job being applied for
+    username: the username of the user applying for the job
+  Returns: { applied: jobId }
+
+  Throws NotFoundError if the user or job is not found.
+
+  Throws BadRequestError if the user has already applied for the job.
+  **/
+
+  static async apply(username, jobId, req) { 
+    if (req.res.locals.user.username !== username && !req.res.locals.user.isAdmin) {
+      throw new BadRequestError("You are not allowed to apply for other users unless you are an admin");
+    }
+
+    const preCheckRes = await db.query(
+      `SELECT id, title, salary, equity, company_handle
+      FROM jobs
+      WHERE id = $1`, [jobId]);
+    const job = preCheckRes.rows[0];
+    if (!job) {
+      throw new NotFoundError(`No job found with id ${jobId}`);
+    }
+  
+    const checkRes = await db.query(
+      `SELECT *
+       FROM applications
+       WHERE username = $1 AND job_id = $2`, [username, jobId]);
+    if (checkRes.rows[0]) {
+      throw new BadRequestError(`User ${username} has already applied to job ${jobId}`);
+    }
+  
+    const result = await db.query(
+      `INSERT INTO applications
+       (username, job_id)
+       VALUES ($1, $2)
+       RETURNING job_id AS "jobId"`,
+      [username, jobId]);
+  
+    const application = result.rows[0];
+    return application.jobId;
+  }
+
+******************
+Part 5 Commit 27:
+****************** 
+Add route for applying for a job in users.js:
+/** POST /users/:username/jobs/:id => { applied: jobId }
+*
+* Allows a user to apply for a job with the given jobId.
+*
+* Returns JSON with key "applied" and the value of the jobId for which the user applied.
+* 
+* Authorization required: login
+**/
+
+router.post("/:username/jobs/:id", ensureLoggedIn, authenticateJWT, async function (req, res, next) {
+  try {  
+    const { username, id } = req.params;
+
+    await User.apply(username, id, req);
+
+    return res.json({ applied: id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+******************
+Part 5 Commit 28:
+****************** 
+Add tests in users.test.js for "apply" function in users.js:
+/************************************** apply */
+describe("apply", function () {
+  test("user can apply for themselves", async () => {
+    const jobId = 1; // Replace with an existing jobId in your test database
+    const username = "u2";
+    await expect(User.apply(username, jobId, { res: { locals: { user: { username: username, isAdmin: false }}}}))
+      .resolves.toBe(jobId);
+    });
+
+
+  test("user cannot apply for anyone else", async () => {
+    const jobId = 2; // Replace with an existing jobId in your test database
+    const username = "u3";
+    await expect(User.apply(username, jobId, { res: { locals: { user: { username: "u2", isAdmin: false }}}}))
+      .rejects.toThrow(BadRequestError);
+  });
+
+  test("admin can apply for anyone", async () => {
+    const jobId = 3; // Replace with an existing jobId in your test database
+    const username = "u2";
+    await expect(User.apply(username, jobId, { res: { locals: { user: { username: "u1", isAdmin: true }}}}))
+      .resolves.toBe(jobId);
+  });
+
+  test("error thrown if job not found", async () => {
+    const jobId = 9999; // Replace with a non-existent jobId
+    const username = "u2";
+    await expect(User.apply(username, jobId, { res: { locals: { user: { username: username, isAdmin: false }}}}))
+      .rejects.toThrow(NotFoundError);
+  }); 
+
+  test("error thrown if param username has already applied for job", async () => {
+    const jobId = 3; // Replace with an existing jobId in your test database that the user has already applied for
+    const username = "u2";
+    await User.apply(username, jobId, { res: { locals: { user: { username: username, isAdmin: false }}}}); // First apply
+    await expect(User.apply(username, jobId, { res: { locals: { user: { username: username, isAdmin: false }}}}))
+      .rejects.toThrow(BadRequestError);
+  });
+});
+
+Note that the logic for returning the jobs array is in the user model. Without changing the route, if we curl:
+curl -X GET -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgzMDIzNTQ0fQ.fSjsfeAuYNWshYi93AA94oVUVdShzm_eVIXcIMZlu4Q" http://localhost:3001/users/11111
+
+We get the user with the newly formed jobs array (here with ids 1, 6, 7):
+{"user":{"username":"11111","firstName":"11111","lastName":"11111","email":"11111@11111.com","isAdmin":true,"jobs":[1,6,7]}}
