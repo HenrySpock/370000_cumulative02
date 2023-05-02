@@ -175,3 +175,347 @@ curl "http://localhost:3001/companies?minEmployees=400&maxEmployees=420" | jq
 
 Filter by name, minEmployees, and maxEmployees:
 curl "http://localhost:3001/companies?name=Apple&minEmployees=5000&maxEmployees=10000" | jq
+
+******************
+Part 3 Commit 7:
+****************** 
+Register a user:
+curl -X POST "http://localhost:3001/auth/register" -H "Content-Type: application/json" -d '{"username": "11111", "password": "11111", "firstName": "11111", "lastName": "11111", "email": "11111@11111.com"}'
+{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2MTk4MH0.jFXnKT3FbVhcxTZFRHn8s-zYh-C-vn86i49Whttq22Y"}
+
+Test authentication against a route that uses ensureLoggedIn function:
+Without and with token:
+without
+curl -X GET "http://localhost:3001/users" -H "Content-Type: application/json"
+with
+curl -X GET "http://localhost:3001/users" -H "Content-Type: application/json" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2MTk4MH0.jFXnKT3FbVhcxTZFRHn8s-zYh-C-vn86i49Whttq22Y"
+
+Update the new user to admin:
+UPDATE users SET is_admin = true WHERE username = '11111';
+
+Create a second user:
+curl -X POST "http://localhost:3001/auth/register" -H "Content-Type: application/json" -d '{"username": "22222", "password": "22222", "firstName": "22222", "lastName": "22222", "email": "22222@22222.com"}'
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjIyMjIyIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2NDMzMn0.IaIJ3peHOOJKlMpbNhZ6GtIR7uWJIaip0RaFYh4cp8w
+
+******************
+Part 3 Commit 8:
+****************** 
+Create a login route that check sfor admin status:
+In auth.js:
+/** POST /auth/login:  { username, password } => { token }
+ *
+ * Returns JWT token which can be used to authenticate further requests.
+ *
+ * Authorization required: none
+ */
+
+router.post("/login", async function (req, res, next) {
+  try {
+    const { username, password } = req.body;
+    const user = await User.authenticate(username, password);
+    const token = createToken(user);
+
+    // Log the token payload to the terminal
+    console.log('Token payload:', user);
+    
+    return res.json({ token });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+Testing login route:
+curl -X POST "http://localhost:3001/auth/login" -H "Content-Type: application/json" -d '{"username": "11111", "password": "11111"}'
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNjY0NTM4fQ.aEPPwspykwM3_oCagXaihmCSmvVJUlL8IPvjTHSh7wk
+curl -X POST "http://localhost:3001/auth/login" -H "Content-Type: application/json" -d '{"username": "22222", "password": "22222"}'
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjIyMjIyIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2NTU4NH0.cOAuCfIR0CBUIcG-t3uGdFCeNlprtCKzzWkXkCfDGPc
+curl -X POST "http://localhost:3001/auth/login" -H "Content-Type: application/json" -d '{"username": "33333", "password": "33333"}'
+
+******************
+Part 3 Commit 9:
+****************** 
+Function for checking admin status in middleware/auth.js :
+/** Middleware: Ensure user is an admin.
+ *
+ * If a token was provided and the user is logged in, checks if the user has
+ * the isAdmin flag set to true in the token payload (res.locals.user.isAdmin).
+ *
+ * If the user is not an admin, raises Unauthorized.
+ *
+ * Requires the authenticateJWT middleware to be executed before this middleware.
+ */
+
+function ensureAdmin(req, res, next) {
+  try {
+    if (!res.locals.user || !res.locals.user.isAdmin) {
+      throw new UnauthorizedError("Admin privileges required");
+    }
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+}
+ 
+Export ensureAdmin:
+module.exports = {
+  authenticateJWT,
+  ensureLoggedIn,
+  ensureAdmin,
+};
+
+******************
+Part 3 Commit 10:
+****************** 
+Update routes/companies.js and routes/users.js to include authenticateJWT and ensureAdmin:
+const { ensureLoggedIn, authenticateJWT, ensureAdmin } = require("../middleware/auth");
+
+Update the relevant routes to include ensureLoggedIn, authenticateJWT, ensureAdmin functions:
+POST route for routes/companies.js:
+/** POST / { company } =>  { company }...
+
+router.post("/", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next)...
+
+If curled with user 22222's token:
+curl -X POST "http://localhost:3001/companies" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNjY0NTM4fQ.aEPPwspykwM3_oCagXaihmCSmvVJUlL8IPvjTHSh7wk" \
+     -d '{"handle": "55555", "name": "55555", "description": "55555 5", "numEmployees": 55, "logoUrl": "https://example.com/logo.png"}'
+
+{"error":{"message":"Admin privileges required","status":401}}
+
+But if curled with user 11111's token, we create the new company.
+
+PATCH route for routes/companies.js:
+/** PATCH /[handle] { fld1, fld2, ... } => { company }...
+
+router.patch("/:handle", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next)...
+
+Curling this with token from user 11111:
+curl -X PATCH "http://localhost:3001/companies/55555" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNjY0NTM4fQ.aEPPwspykwM3_oCagXaihmCSmvVJUlL8IPvjTHSh7wk" \
+     -d '{"name": "5---5", "description": "5---5"}'
+
+DELETE route for routes/companies.js:
+/** DELETE /[handle]  =>  { deleted: handle }...
+
+router.delete("/:handle", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+
+Curl the DELETE route with user 11111's token:
+curl -X DELETE "http://localhost:3001/companies/55555" \
+     -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNjY0NTM4fQ.aEPPwspykwM3_oCagXaihmCSmvVJUlL8IPvjTHSh7wk"
+Company is deleted.
+
+******************
+Part 3 Commit 11:
+****************** 
+Updating _testCommon.js:
+npx jest companies.test.js -i --coverage --watchAll=false
+We are going to make u1Token an admin, create u2Token as not admin, and export u2Token:
+const u1Token = createToken({ username: "u1", isAdmin: true });
+const u2Token = createToken({ username: "u2", isAdmin: false });
+
+module.exports = {
+  commonBeforeAll,
+  commonBeforeEach,
+  commonAfterEach,
+  commonAfterAll,
+  u1Token,
+  u2Token,
+};
+
+Updateing companies.test.js:
+const {
+  commonBeforeAll,
+  commonBeforeEach,
+  commonAfterEach,
+  commonAfterAll,
+  u1Token,
+  u2Token,
+} = require("./_testCommon");
+
+/************************************** GET /companies */
+
+describe("GET /companies", function () {
+  test("ok for anon", async function () {
+    const resp = await request(app).get("/companies");
+    expect(resp.body).toEqual({
+      companies:
+          [
+            {
+              handle: "c1",
+              name: "C1",
+              description: "Desc1",
+              num_employees: 1,
+              logo_url: "http://c1.img",
+            },
+            {
+              handle: "c2",
+              name: "C2",
+              description: "Desc2",
+              num_employees: 2,
+              logo_url: "http://c2.img",
+            },
+            {
+              handle: "c3",
+              name: "C3",
+              description: "Desc3",
+              num_employees: 3,
+              logo_url: "http://c3.img",
+            },
+          ],
+    });
+  });
+});
+
+******************
+Part 3 Commit 12:
+****************** 
+GET /companies/:handle:
+Update the findAll parameters to include handle:
+static async findAll(searchParams = {}) {
+  const { name, minEmployees, maxEmployees, handle } = searchParams;
+...
+  if (handle) {
+    queryValues.push(handle);
+    whereClause.push(`handle = $${queryValues.length}`);
+  }
+...
+
+Update the route function call:
+    const companies = await Company.findAll({ handle: req.params.handle });
+
+PATCH: All pass.
+DELETE: All pass - adding a test for a user trying to delete a company:
+  test("unauth for anon", async function () {
+    const resp = await request(app)
+        .delete(`/companies/c1`);
+    expect(resp.statusCode).toEqual(401);
+  });
+
+******************
+Part 3 Commit 13:
+****************** 
+Running all test suites, 4 new failures are occuring in users.test.js. I assume this is 
+because u1Token is now an admin.
+
+In GET /users:
+update the expected response:
+        {
+          username: "u1",
+          firstName: "U1F",
+          lastName: "U1L",
+          email: "user1@user.com",
+          isAdmin: true,
+        },
+
+In GET /users/username:
+update the expected response:
+      user: {
+        username: "u1",
+        firstName: "U1F",
+        lastName: "U1L",
+        email: "user1@user.com",
+        isAdmin: true,
+      },
+
+In PATCH /users/:username:
+  test("works for users", async function () {
+
+update the expected response: 
+      user: {
+        username: "u1",
+        firstName: "New",
+        lastName: "U1L",
+        email: "user1@user.com",
+        isAdmin: true,
+      },
+
+ test("works: set new password", async function () {
+update the expected response: 
+      user: {
+        username: "u1",
+        firstName: "New",
+        lastName: "U1L",
+        email: "user1@user.com",
+        isAdmin: true,
+      },
+
+******************
+Part 3 Commit 14:
+****************** 
+Update the USER routes that should only be accessible by admins:
+Creating a user:
+/** POST / { user }  => { user, token } 
+update route functions:
+router.post("/", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) 
+
+Curling with 22222:
+curl -X POST -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjIyMjIyIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2NTU4NH0.cOAuCfIR0CBUIcG-t3uGdFCeNlprtCKzzWkXkCfDGPc" -H "Content-Type: application/json" -d '{"username":"66666", "password":"66666", "firstName":"66666", "lastName":"66666", "email":"66666@66666.com", "isAdmin":true}' http://localhost:3001/users
+Response:
+{"error":{"message":"Admin privileges required","status":401}}
+
+Curling with 11111's token:
+curl -X POST -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgzMDIzNTQ0fQ.fSjsfeAuYNWshYi93AA94oVUVdShzm_eVIXcIMZlu4Q" -H "Content-Type: application/json" -d '{"username":"77777", "password":"77777", "firstName":"77777", "lastName":"77777", "email":"77777@77777.com", "isAdmin":true}' http://localhost:3001/users
+
+{"user":{"username":"77777","firstName":"77777","lastName":"77777","email":"77777@77777.com","isAdmin":true},"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6Ijc3Nzc3IiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgzMDIzNTc1fQ.RvNRuRT_skmbF3yu3NClGYs99yUc0XnxerW2MjxWwS0"}
+
+Get list of all users:
+/** GET / => { users: [ {username, firstName, lastName, email }, ... ] } 
+Update the route parametes:
+
+router.get("/", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    const users = await User.findAll();
+    return res.json({ users });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+Curling with 22222:
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjIyMjIyIiwiaXNBZG1pbiI6ZmFsc2UsImlhdCI6MTY4MjY2NTU4NH0.cOAuCfIR0CBUIcG-t3uGdFCeNlprtCKzzWkXkCfDGPc" http://localhost:3001/users
+
+Response:
+{"error":{"message":"Admin privileges required","status":401}}
+
+Curling with 11111:
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNjY0NTM4fQ.aEPPwspykwM3_oCagXaihmCSmvVJUlL8IPvjTHSh7wk" http://localhost:3001/users | jq
+Response:
+Expected list of users
+ 
+/** PATCH /[username] { user } => { user }
+/** DELETE /[username]  =>  { deleted: username }
+Should all require authenticateJWT and ensureAdmin:
+router.patch("/:username", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+router.delete("/:username", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+
+******************
+Part 3 Commit 15:
+****************** 
+Tests:
+In all of these updates, note u1Token is already set to admin in _testCommon.js - changing this to u2Token makes the test fail
+
+update:
+  test("works for users: create admin", async function () {
+to
+  test("works for admins: create admin", async function () {
+
+update:
+describe("GET /users", function () {
+to
+describe("Works for admins: GET /users", function () { 
+
+update:
+describe("PATCH /users/:username", () => {
+  test("works for users", async function () {
+to
+describe("PATCH /users/:username", () => {
+  test("works for admins", async function () {
+
+update:
+describe("DELETE /users/:username", function () {
+  test("works for users", async function () {
+to
+describe("DELETE /users/:username", function () {
+  test("works for admins", async function () {
