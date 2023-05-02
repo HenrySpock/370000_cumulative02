@@ -519,3 +519,909 @@ describe("DELETE /users/:username", function () {
 to
 describe("DELETE /users/:username", function () {
   test("works for admins", async function () {
+
+******************
+Part 4 Commit 16:
+****************** 
+Write models/job.js:
+"use strict";
+
+const db = require("../db");
+const { BadRequestError, NotFoundError } = require("../expressError");
+const { sqlForPartialUpdate } = require("../helpers/sql");
+
+/** Related functions for jobs. */
+
+class Job {
+  /** Create a job (from data), update db, return new job data.
+   *
+   * data should be { title, salary, equity, companyHandle }
+   *
+   * Returns { id, title, salary, equity, companyHandle }
+   *
+   * Throws BadRequestError if companyHandle is not in db.
+   **/
+
+  static async create({ title, salary, equity, companyHandle }) {
+    const companyCheck = await db.query(
+      `SELECT handle
+           FROM companies
+           WHERE handle = $1`,
+      [companyHandle]);
+  
+    if (!companyCheck.rows[0])
+      throw new BadRequestError(`Company ${companyHandle} not found.`);
+   
+    const result = await db.query(
+      `INSERT INTO jobs
+           (title, salary, equity, company_handle)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, title, salary, equity, company_handle AS "companyHandle"`,
+      [
+        title,
+        salary,
+        equity, 
+        companyHandle,
+      ],
+    );
+    const job = result.rows[0];
+  
+    return job;
+  }
+  
+
+  /** Find all jobs.
+   *
+   * Returns [{ id, title, salary, equity, companyHandle }, ...]
+   * */
+  static async findAll(searchParams = {}) {
+    const { title, minSalary, hasEquity } = searchParams;
+
+    let whereClause = [];
+    let queryValues = [];
+
+    if (title) {
+      queryValues.push(`%${title}%`);
+      whereClause.push(`title ILIKE $${queryValues.length}`);
+    }
+
+    if (minSalary) {
+      queryValues.push(minSalary);
+      whereClause.push(`salary >= $${queryValues.length}`);
+    }
+
+    if (hasEquity) {
+      whereClause.push(`equity > 0`);
+    }
+
+    const whereClauseStr = whereClause.length > 0 ? `WHERE ${whereClause.join(' AND ')}` : '';
+    const query = `
+      SELECT id, title, salary, equity, company_handle AS "companyHandle"
+      FROM jobs
+      ${whereClauseStr}
+    `;
+    const result = await db.query(query, queryValues); 
+
+    console.log('Fetched jobs:', result.rows);
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError(`No job found with the given parameters`);
+    }
+    
+    return result.rows;
+  }
+
+  /** Given a job id, return data about job.
+   *
+   * Returns { id, title, salary, equity, company }
+   *   where company is { handle, name, description, numEmployees, logoUrl }
+   *
+   * Throws NotFoundError if not found.
+   **/
+
+  static async get(id) {
+    const jobRes = await db.query(
+      `SELECT id, title, salary, equity, company_handle AS "companyHandle"
+           FROM jobs
+           WHERE id = $1`,
+      [id]
+    );
+  
+    const job = jobRes.rows[0];
+  
+    if (!job) throw new NotFoundError(`No job: ${id}`);
+  
+    const companyRes = await db.query(
+      `SELECT handle, name, description, num_employees AS "numEmployees", logo_url AS "logoUrl"
+           FROM companies
+           WHERE handle = $1`,
+      [job.companyHandle]
+    );
+  
+    job.company = companyRes.rows[0];
+  
+    delete job.companyHandle;
+  
+    return job;
+  }
+  
+
+  /** Update job data with `data`.
+   *
+   * This is a "partial update" --- it's fine if data doesn't contain all the
+   * fields; this only changes provided ones.
+   *
+   * Data can include: {title, salary, equity}
+   *
+   * Returns {id, title, salary, equity, company_handle}
+   *
+   * Throws NotFoundError if not found.
+   */
+
+  static async update(id, data) {
+    const { setCols, values } = sqlForPartialUpdate(
+        data,
+        {});
+    const idVarIdx = "$" + (values.length + 1);
+
+    const querySql = `UPDATE jobs 
+                      SET ${setCols} 
+                      WHERE id = ${idVarIdx} 
+                      RETURNING id, 
+                                title, 
+                                salary, 
+                                equity, 
+                                company_handle`;
+    const result = await db.query(querySql, [...values, id]);
+    const job = result.rows[0];
+
+    if (!job) throw new NotFoundError(`No job: ${id}`);
+
+    return job;
+  }
+
+  /** Delete given job from database; returns undefined.
+ *
+ * Throws NotFoundError if job not found.
+ **/
+
+  static async remove(id) {
+    const result = await db.query(
+          `DELETE
+            FROM jobs
+            WHERE id = $1
+            RETURNING id`,
+        [id]);
+    const job = result.rows[0];
+    console.log(id)
+    if (!job) throw new NotFoundError(`No job: ${id}`);
+  }
+}
+
+module.exports = Job;
+
+******************
+Part 4 Commit 17:
+****************** 
+Test models/job.js in node repl:
+create:
+const newJob = await Job.create({ title: 'Software Engineer', salary: 80000, equity: 0.05, companyHandle: 'bauer-gallagher' });
+console.log(newJob);
+
+findAll:
+const allJobs = await Job.findAll();
+console.log(allJobs);
+
+findAll/id:
+const job = await Job.get(201); (200 is currently the last job in the database, so in these test the id of the created job is 201.)
+console.log(job);
+
+update:
+const updatedJob = await Job.update(201, { title: 'Senior Software Engineer', salary: 90000 });  
+console.log(updatedJob);
+
+remove:
+await Job.remove(201);  
+console.log('Job removed');
+
+******************
+Part 4 Commit 18:
+****************** 
+Create routes/jobs.js:
+"use strict";
+
+const jsonschema = require("jsonschema");
+const express = require("express");
+
+const { BadRequestError } = require("../expressError");
+const { ensureLoggedIn, authenticateJWT, ensureAdmin } = require("../middleware/auth");
+const Job = require("../models/job");
+
+const jobNewSchema = require("../schemas/jobNew.json");
+const jobUpdateSchema = require("../schemas/jobUpdate.json");
+
+const router = new express.Router();
+
+/** POST / { job } =>  { job }
+ *
+ * job should be { title, salary, equity, companyHandle }
+ *
+ * Returns { id, title, salary, equity, companyHandle }
+ *
+ * Authorization required: login, admin
+ */
+
+router.post("/", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, jobNewSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
+
+    const job = await Job.create(req.body);
+    return res.status(201).json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** GET /  =>
+ *   { jobs: [ { id, title, salary, equity, companyHandle }, ...] }
+ *
+ * Can filter on provided search filters:
+ * - title
+ * - minSalary
+ * - hasEquity
+ *
+ * Authorization required: none
+ */
+
+router.get("/", async function (req, res, next) {
+  console.log("Inside GET /jobs route handler"); 
+  try {
+    const jobs = await Job.findAll(req.query);
+    return res.json({ jobs });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** GET /[id]  =>  { job }
+ *
+ *  Job is { id, title, salary, equity, company }
+ *   where company is { handle, name, description, numEmployees, logoUrl }
+ *
+ * Authorization required: none
+ */
+
+router.get("/:id", async function (req, res, next) {
+  try {
+    const job = await Job.get(req.params.id);
+    return res.json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** PATCH /[id] { fld1, fld2, ... } => { job }
+ *
+ * Patches job data.
+ *
+ * fields can be: { title, salary, equity }
+ *
+ * Returns { id, title, salary, equity, companyHandle }
+ *
+ * Authorization required: login, admin
+ */
+
+router.patch("/:id", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, jobUpdateSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
+
+    const job = await Job.update(req.params.id, req.body);
+    return res.json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** DELETE /[id]  =>  { deleted: id }
+ *
+ * Authorization: login, admin
+ */
+
+router.delete("/:id", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    await Job.remove(req.params.id);
+    return res.json({ deleted: req.params.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+module.exports = router;
+
+******************
+Part 4 Commit 19:
+****************** 
+Write jobNew.json:
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "http://our.company.com/jobNew.schema.json",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "salary": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "equity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "companyHandle": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 25
+    }
+  },
+  "additionalProperties": false,
+  "required": ["title", "salary", "equity", "companyHandle"]
+}
+
+******************
+Part 4 Commit 20:
+****************** 
+Write jobUpdate.json:
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "http://our.company.com/jobUpdate.schema.json",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "salary": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "equity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": []
+}
+
+******************
+Part 4 Commit 21:
+****************** 
+Import routes/jobs to app.js:
+const jobsRoutes = require("./routes/jobs") 
+...
+app.use("/jobs", jobsRoutes);
+
+******************
+Part 4 Commit 22:
+****************** 
+Update _testCommon.js to reset jobs:
+  // noinspection SqlWithoutWhere
+  await db.query("DELETE FROM jobs");
+  await db.query(`ALTER SEQUENCE jobs_id_seq RESTART WITH 1`);
+
+Update INSERTs to include jobs:
+  await db.query(`
+      INSERT INTO jobs (title, salary, equity, company_handle)
+      VALUES ('Job1', 10000, 0.1, 'c1'),
+              ('Job2', 20000, 0.2, 'c2'),
+              ('Job3', 30000, NULL, 'c3')
+      `);
+
+    const jobsResult = await db.query("SELECT * FROM jobs"); 
+    
+Test routes with cURL statements:
+Login an admin:
+curl -X POST "http://localhost:3001/auth/login" -H "Content-Type: application/json" -d '{"username": "11111", "password": "11111"}'
+{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNzcxMDAwfQ.tML3LRd_etBparPfM0MJzVaU8SW8B_4ELjL9vAxvxBE"}
+
+1. POST /jobs (create a new job): 
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNzcxMDAwfQ.tML3LRd_etBparPfM0MJzVaU8SW8B_4ELjL9vAxvxBE" -d '{"title": "Software Engineer", "salary": 90000, "equity": 0.05, "companyHandle": "hall-mills"}' http://localhost:3001/jobs
+
+2. GET /jobs (retrieve all jobs): 
+curl -X GET -H "Content-Type: application/json" http://localhost:3001/jobs 
+
+3. GET /jobs/:id
+curl "http://localhost:3001/jobs/202" 
+(id 201 was used when testing the model)
+
+4. PATCH /jobs/:id (update a specific job): 
+curl -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNzcxMDAwfQ.tML3LRd_etBparPfM0MJzVaU8SW8B_4ELjL9vAxvxBE" -d '{"title": "Senior Software Engineer", "salary": 95000}' http://localhost:3001/jobs/1
+
+5. DELETE /jobs/:id (delete a specific job): 
+curl -X DELETE -H "Content-Type: application/json" -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IjExMTExIiwiaXNBZG1pbiI6dHJ1ZSwiaWF0IjoxNjgyNzcxMDAwfQ.tML3LRd_etBparPfM0MJzVaU8SW8B_4ELjL9vAxvxBE" http://localhost:3001/jobs/202
+
+******************
+Part 4 Commit 23:
+****************** 
+Write models/job.test.js:
+"use strict";
+
+const db = require("../db.js");
+const { BadRequestError, NotFoundError } = require("../expressError");
+const Job = require("./job.js");
+const {
+  commonBeforeAll,
+  commonBeforeEach,
+  commonAfterEach,
+  commonAfterAll,
+} = require("./_testCommon");
+
+beforeAll(commonBeforeAll);
+beforeEach(commonBeforeEach);
+afterEach(commonAfterEach);
+afterAll(commonAfterAll);
+
+/************************************** create */
+
+describe("create", function () {
+  const newJob = {
+    title: "new",
+    salary: 100000,
+    equity: 0.5,
+    companyHandle: "c1",
+  };
+
+  test("works", async function () {
+    let job = await Job.create(newJob);
+
+    job.equity = parseFloat(job.equity);
+
+    expect(job).toEqual({ id: expect.any(Number), ...newJob });
+
+    const result = await db.query(
+          `SELECT id, title, salary, equity, company_handle AS "companyHandle"
+           FROM jobs
+           WHERE title = 'new'`);
+
+    result.rows[0].equity = parseFloat(result.rows[0].equity);
+
+    expect(result.rows).toEqual([
+      {
+        id: expect.any(Number),
+        title: "new",
+        salary: 100000,
+        equity: 0.5,
+        companyHandle: "c1",
+      },
+    ]);
+  });
+
+  test("bad request with invalid companyHandle", async function () {
+    try {
+      await Job.create({ title: "new", salary: 100000, equity: "0.5", companyHandle: "nope" });
+      fail();
+    } catch (err) {
+      expect(err instanceof BadRequestError).toBeTruthy();
+    }
+  });
+});
+
+/************************************** findAll */
+
+describe("findAll", function () {
+  test("works: returns all jobs", async function () {
+    const res = await Job.findAll({});
+      expect(res).toEqual([
+        {
+          id: expect.any(Number),
+          title: "Job1",
+          salary: 10000,
+          equity: "0.1",
+          companyHandle: "c1",
+        },
+        {
+          id: expect.any(Number),
+          title: "Job2",
+          salary: 20000,
+          equity: "0.2",
+          companyHandle: "c2",
+        },
+        {
+          id: expect.any(Number),
+          title: "Job3",
+          salary: 30000,
+          equity: null,
+          companyHandle: "c3",
+        },
+      ]);
+    });
+  });
+
+  test("works: filters by title", async function () {
+    const res = await Job.findAll({ title: "1" });
+    expect(res).toEqual([
+      {
+        id: expect.any(Number),
+        title: "Job1",
+        salary: 10000,
+        equity: "0.1",
+        companyHandle: "c1",
+      },
+    ]);
+  });
+
+  test("works: filters by minSalary", async function () {
+    const res = await Job.findAll({ minSalary: 20000 });
+    expect(res).toEqual([
+      {
+        id: expect.any(Number),
+        title: "Job2",
+        salary: 20000,
+        equity: "0.2",
+        companyHandle: "c2",
+      },
+      {
+        id: expect.any(Number),
+        title: "Job3",
+        salary: 30000,
+        equity: null,
+        companyHandle: "c3",
+      },
+    ]);
+  });
+
+  test("works: filters by hasEquity", async function () {
+    const res = await Job.findAll({ hasEquity: true });
+    expect(res).toEqual([
+      {
+        id: expect.any(Number),
+        title: "Job1",
+        salary: 10000,
+        equity: "0.1",
+        companyHandle: "c1",
+      },
+      {
+        id: expect.any(Number),
+        title: "Job2",
+        salary: 20000,
+        equity: "0.2",
+        companyHandle: "c2",
+      },
+    ]); 
+  });
+
+/************************************** update */
+
+describe("update", function () {
+  const updateData = {
+    title: "New",
+    salary: 200000,
+    equity: "0.2",
+  };
+
+  test("works", async function () {
+    const job = await Job.create({
+      title: "Job1",
+      salary: 10000,
+      equity: 0.1,
+      companyHandle: "c1",
+    });
+    
+    let updatedJob = await Job.update(job.id, updateData);
+    
+    expect(updatedJob).toEqual({
+      id: job.id,
+      company_handle: "c1",
+      ...updateData,
+    });
+  
+    const result = await db.query(
+      `SELECT id, company_handle, title, salary, equity
+       FROM jobs
+       WHERE id = $1`, [job.id]);
+    
+    expect(result.rows).toEqual([{
+      id: job.id,
+      company_handle: "c1",
+      title: "New",
+      salary: 200000,
+      equity: "0.2",
+    }]);
+  });
+
+  test("updates job with null fields", async function () {
+    const updateData = {
+      salary: null,
+      equity: null,
+    };
+    const job = await Job.create({
+      title: "Job1",
+      salary: 10000,
+      equity: 0.1,
+      companyHandle: "c1",
+    });
+    const updatedJob = await Job.update(job.id, updateData);
+    expect(updatedJob).toEqual({
+      id: job.id,
+      company_handle: "c1",
+      title: "Job1",
+      salary: null,
+      equity: null,
+    });
+  });
+  
+  test("not found if no such job", async function () {
+    try {
+      await Job.update(9999, { title: "New", salary: 200000, equity: "0.2" });
+    } catch (err) {
+      expect(err instanceof NotFoundError).toBeTruthy();
+      expect(err.message).toEqual("No job: 9999");
+    }
+  }); 
+
+  test("bad request with no data", async function () {
+    try {
+      await Job.update("Job1", {}); 
+    } catch (err) {
+      expect(err instanceof BadRequestError).toBeTruthy();
+    }
+  });
+});
+
+/************************************** remove */
+
+describe("remove", function () {
+  test("works", async function () {
+    await Job.remove(1);
+    const res = await db.query(
+        "DELETE FROM jobs WHERE id=1 ");
+    expect(res.rows.length).toEqual(0);
+  });
+
+  test("not found if no such job", async function () {
+    try {
+      await Job.remove(10000); 
+    } catch (err) {
+      expect(err instanceof NotFoundError).toBeTruthy();
+    }
+  });
+});
+
+******************
+Part 4 Commit 24:
+****************** 
+write routes/jobs.test.js:
+"use strict";
+
+const jsonschema = require("jsonschema");
+const express = require("express");
+
+const { BadRequestError } = require("../expressError");
+const { ensureLoggedIn, authenticateJWT, ensureAdmin } = require("../middleware/auth");
+const Job = require("../models/job");
+
+const jobNewSchema = require("../schemas/jobNew.json");
+const jobUpdateSchema = require("../schemas/jobUpdate.json");
+
+const router = new express.Router();
+
+/** POST / { job } =>  { job }
+ *
+ * job should be { title, salary, equity, companyHandle }
+ *
+ * Returns { id, title, salary, equity, companyHandle }
+ *
+ * Authorization required: login, admin
+ */
+
+router.post("/", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, jobNewSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
+
+    const job = await Job.create(req.body);
+    return res.status(201).json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** GET /  =>
+ *   { jobs: [ { id, title, salary, equity, companyHandle }, ...] }
+ *
+ * Can filter on provided search filters:
+ * - title
+ * - minSalary
+ * - hasEquity
+ *
+ * Authorization required: none
+ */
+
+router.get("/", async function (req, res, next) {
+  console.log("Inside GET /jobs route handler"); 
+  try {
+    const jobs = await Job.findAll(req.query);
+    return res.json({ jobs });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** GET /[id]  =>  { job }
+ *
+ *  Job is { id, title, salary, equity, company }
+ *   where company is { handle, name, description, numEmployees, logoUrl }
+ *
+ * Authorization required: none
+ */
+
+router.get("/:id", async function (req, res, next) {
+  try {
+    const job = await Job.get(req.params.id);
+    return res.json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** PATCH /[id] { fld1, fld2, ... } => { job }
+ *
+ * Patches job data.
+ *
+ * fields can be: { title, salary, equity }
+ *
+ * Returns { id, title, salary, equity, companyHandle }
+ *
+ * Authorization required: login, admin
+ */
+
+router.patch("/:id", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    const validator = jsonschema.validate(req.body, jobUpdateSchema);
+    if (!validator.valid) {
+      const errs = validator.errors.map(e => e.stack);
+      throw new BadRequestError(errs);
+    }
+
+    const job = await Job.update(req.params.id, req.body);
+    return res.json({ job });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+/** DELETE /[id]  =>  { deleted: id }
+ *
+ * Authorization: login, admin
+ */
+
+router.delete("/:id", ensureLoggedIn, authenticateJWT, ensureAdmin, async function (req, res, next) {
+  try {
+    await Job.remove(req.params.id);
+    return res.json({ deleted: req.params.id });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+module.exports = router;
+
+******************
+Part 4 Commit 25:
+****************** 
+Update routes: companies.js GET /:handle:
+/** GET /[handle]  =>  { company }
+ *
+ *  Company is { handle, name, description, numEmployees, logoUrl, jobs }
+ *   where jobs is [{ id, title, salary, equity }, ...]
+ *
+ * Authorization required: none
+ */
+
+router.get("/:handle", async function (req, res, next) {
+  try {
+    const company = await Company.get(req.params.handle);
+    console.log(company)
+    return res.json({ company });
+
+  } catch (err) {
+    return next(err);
+  }
+});
+
+Update tests for GET /companies/:handle:
+
+/************************************** GET /companies/:handle */
+
+describe("GET /companies/:handle", function () { 
+  test("works for anon", async function () {
+    const resp = await request(app).get(`/companies/c1`);
+    expect(resp.body).toEqual({
+      company: {
+        handle: "c1",
+        name: "C1",
+        description: "Desc1",
+        num_employees: 1,
+        logo_url: "http://c1.img",
+        jobs: [ 
+          {
+            "equity": "0.1",
+            "id": 1,
+            "salary": 10000,
+            "title": "Job1",
+          },
+          {
+            "equity": "0.2",
+            "id": 2,
+            "salary": 20000,
+            "title": "Job2",
+          },
+          {
+            "equity": null,
+            "id": 3,
+            "salary": 30000,
+            "title": "Job3",
+          },
+        ],
+      },
+    });
+  });
+});
+
+  test("works for anon: company w/o jobs", async function () {
+    const resp = await request(app).get(`/companies/c2`);
+    expect(resp.body).toEqual({
+      company: {
+        handle: "c2",
+        name: "C2",
+        description: "Desc2",
+        num_employees: 2,
+        logo_url: "http://c2.img",
+        jobs: [],
+      },
+    });
+  });
+
+  test("not found for no such company", async function () {
+    const resp = await request(app).get(`/companies/nope`);
+    expect(resp.statusCode).toEqual(404);
+  }); 
+
+Documentation for the Job findAll function with filtering:
+
+Description
+An asynchronous method that searches for and retrieves job records from the jobs table in the database using provided search parameters. 
+The function returns an array of found job records or throws a NotFoundError if no records match the given criteria.
+
+Parameters
+searchParams (Object, optional): An object containing key-value pairs of search criteria with a default value of an empty object ({}).
+title (string, optional): case-insensitive and matches any title containing the provided string
+minSalary (number, optional): only jobs with salaries greater than or equal to this value will be returned.
+hasEquity (boolean, optional): A flag indicating whether or not to filter the results based on equity. If set to true, only jobs with positive equity values will be returned.
+
+Returns
+(Promise<Array<Object>>): A Promise that resolves to an array of job objects containing the following properties:
+
+id (number): unique job identifier
+title (string): title of the job.
+salary (number): the salary offered 
+equity (number): equity offered, represented as a decimal (e.g., 0.01 for 1%)
+companyHandle (string): The unique identifier of the offering company  
+
+Throws
+NotFoundError: if no matching jobs are found 
