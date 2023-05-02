@@ -1,6 +1,177 @@
 ******************
-PART 1 Commit 1: sqlForPartialUpdate
+PART 1 Commit 1: 
 ******************
 
 // Import the sqlForPartialUpdate function from the sql.js module
 const { sqlForPartialUpdate } = require("./sql");
+
+******************
+PART 1 Commit 2:
+******************
+// Start test suite for the sqlForPartialUpdate function
+describe("sqlForPartialUpdate", function () {
+
+  // Test the function with data
+  test("works with data", function () {
+    // Call the sqlForPartialUpdate function with sample data
+    const result = sqlForPartialUpdate(
+      { firstName: "Douglas", age: 42 },
+      { firstName: "first_name" }
+    );
+    // Expect the result to match a specific format
+    expect(result).toEqual({
+      setCols: '"first_name"=$1, "age"=$2',
+      values: ["Douglas", 42],
+    });
+  });
+
+  // Test the function with no data - should throw an error
+  test("throws error if no data", function () {
+    // Call the sqlForPartialUpdate function with empty objects
+    // expect error to be thrown with specific message
+    expect(() => sqlForPartialUpdate({}, {})).toThrowError(
+      "No data"
+    );
+  });
+});
+
+Documentation:
+sql.test.js tests the sqlForPartialUpdate function from the helpers/sql.js module. The function takes two objects as arguments: 
+a data object with the values to be updated, and a js-to-sql object mapping names of the columns to the names in the database. 
+It returns an object with two properties: setCols (a string with column names and corresponding update parameter placeholders)
+and values (an array of values for the update statement to use).
+
+'Test the function with data' checks the function with sample data. It expects the resulting format to match.
+
+"Test the function with no data' checks the function with no data and exepcts an error ("No data").
+
+******************
+Part 2 Commit 3:
+****************** 
+Add filtering to GET /companies router.get (with comments):
+router.get('/', async function (req, res, next) {
+  try { 
+    if (!validateQuery(req.query)) {
+      return res.status(400).json({ error: 'Invalid query parameters' });
+    }
+
+    const filters = {
+      name: req.query.name || null,
+      minEmployees: req.query.minEmployees || null,
+      maxEmployees: req.query.maxEmployees || null,
+    };
+    
+    const whereClauses = [];
+    const params = [];
+
+    if (filters.name) {
+      whereClauses.push(`LOWER(name) LIKE LOWER($${params.length + 1})`);
+      params.push(`%${filters.name}%`);
+    }
+
+    if (filters.minEmployees) {
+      whereClauses.push(`num_employees >= $${params.length + 1}`);
+      params.push(filters.minEmployees);
+    }
+
+    if (filters.maxEmployees) {
+      whereClauses.push(`num_employees <= $${params.length + 1}`);
+      params.push(filters.maxEmployees);
+    }
+    console.log("FILTERS: ", filters)
+    const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const queryStr = `SELECT * FROM companies ${whereStr}`;
+
+    // Execute the query using your preferred database library.
+    const companies = await Company.findAll({
+      name: filters.name,
+      minEmployees: filters.minEmployees,
+      maxEmployees: filters.maxEmployees,
+    });
+
+    return res.json({ companies });
+
+  } catch (err) {
+    return next(err);
+  }
+});
+
+******************
+Part 2 Commit 4:
+****************** 
+Adding the validateQuery function referenced by companies router.get:
+// validateQuery checks if the provided query object contains only the allowed fields
+function validateQuery(query) {
+  const allowedFields = new Set(['name', 'minEmployees', 'maxEmployees']);
+  const queryFields = Object.keys(query);
+
+  for (const field of queryFields) {
+    if (!allowedFields.has(field)) {
+      return false;
+    }
+  }
+  console.log("FILTERS VALDIATED")
+  return true;
+}
+
+******************
+Part 2 Commit 5:
+****************** 
+Documentation:
+GET /companies
+Description: Fetches a list of companies from the database, filtered based on the provided query parameters.
+Query Parameters:
+
+name: (optional) Filter companies by name (case-insensitive, partial match).
+minEmployees: (optional) Filter companies with a minimum number of employees.
+maxEmployees: (optional) Filter companies with a maximum number of employees.
+Example Usage:
+
+Fetch all companies with a name containing "smith" and between 410 and 990 employees:
+GET /companies?name=smith&minEmployees=410&maxEmployees=990
+validateQuery(query)
+Description: Validates the incoming query parameters against the allowed fields.
+Parameters:
+
+query: The query object containing the query parameters
+Returns: Returns true if all query parameters are valid, false otherwise.
+
+Company.findAll({ name, minEmployees, maxEmployees })
+Description: A static method in the Company model that fetches companies from the database based on the provided filters.
+Parameters:
+
+name: (optional) Filter companies by name (case-insensitive, partial match).
+minEmployees: (optional) Filter companies with a minimum number of employees.
+maxEmployees: (optional) Filter companies with a maximum number of employees.
+Returns: An array of company objects that match the provided filters. Each object contains the following properties:
+
+handle: Company handle
+name: Company name
+num_employees: Number of employees
+description: Company description
+logo_url: Company logo URL
+
+******************
+Part 2 Commit 6:
+****************** 
+curl tets for company filtering:
+Filter by name:
+curl "http://localhost:3001/companies?name=smith" | jq
+
+Filter by minEmployees:
+curl "http://localhost:3001/companies?minEmployees=990" | jq
+
+Filter by maxEmployees:
+curl "http://localhost:3001/companies?maxEmployees=20" | jq
+
+Filter by name and minEmployees:
+curl "http://localhost:3001/companies?name=smith&minEmployees=400" | jq
+
+Filter by name and maxEmployees:
+curl "http://localhost:3001/companies?name=smith&minEmployees=5000" | jq
+
+Filter by minEmployees and maxEmployees:
+curl "http://localhost:3001/companies?minEmployees=400&maxEmployees=420" | jq
+
+Filter by name, minEmployees, and maxEmployees:
+curl "http://localhost:3001/companies?name=Apple&minEmployees=5000&maxEmployees=10000" | jq
